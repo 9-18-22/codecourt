@@ -1,0 +1,16 @@
+# API 키, 환경변수
+.env
+*.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# 결과 파일 (용량 크고 개인 결과라서)
+benchmarks/results/
+results/
+
+# macOS
+.DS_Store

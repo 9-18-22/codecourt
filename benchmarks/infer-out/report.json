@@ -1,0 +1,120 @@
+[
+  {
+    "bug_type": "NULL_DEREFERENCE",
+    "bug_type_hum": "Null Dereference",
+    "qualifier": "null dereference of `item`.",
+    "severity": "ERROR",
+    "line": 42,
+    "column": -1,
+    "procedure": "main",
+    "procedure_id": "main",
+    "procedure_start_line": 33,
+    "file": "null_deref.c",
+    "bug_trace": [
+      {
+        "level": 0,
+        "filename": "null_deref.c",
+        "line_number": 21,
+        "column_number": -1,
+        "description": "taking false branch (v >= 0 is false)"
+      },
+      {
+        "level": 0,
+        "filename": "null_deref.c",
+        "line_number": 22,
+        "column_number": -1,
+        "description": "return NULL"
+      },
+      {
+        "level": 0,
+        "filename": "null_deref.c",
+        "line_number": 41,
+        "column_number": -1,
+        "description": "item assigned the return value of create_item(input)"
+      },
+      {
+        "level": 0,
+        "filename": "null_deref.c",
+        "line_number": 42,
+        "column_number": -1,
+        "description": "null dereference of `item` via call to print_item"
+      }
+    ],
+    "key": "null_deref_main_42",
+    "hash": "aabbcc112233"
+  },
+  {
+    "bug_type": "USE_AFTER_FREE",
+    "bug_type_hum": "Use After Free",
+    "qualifier": "memory `head` freed here and accessed via pointer `head` later.",
+    "severity": "ERROR",
+    "line": 43,
+    "column": -1,
+    "procedure": "main",
+    "procedure_id": "main",
+    "procedure_start_line": 24,
+    "file": "use_after_free.c",
+    "bug_trace": [
+      {
+        "level": 0,
+        "filename": "use_after_free.c",
+        "line_number": 34,
+        "column_number": -1,
+        "description": "taking true branch (do_free_early == 1)"
+      },
+      {
+        "level": 0,
+        "filename": "use_after_free.c",
+        "line_number": 35,
+        "column_number": -1,
+        "description": "free(head)"
+      },
+      {
+        "level": 0,
+        "filename": "use_after_free.c",
+        "line_number": 43,
+        "column_number": -1,
+        "description": "use-after-free: accessing head->data"
+      }
+    ],
+    "key": "uaf_main_43",
+    "hash": "ddeeff445566"
+  },
+  {
+    "bug_type": "BUFFER_OVERRUN_L1",
+    "bug_type_hum": "Buffer Overrun",
+    "qualifier": "buffer `buf` overrun: `src` length may exceed 16 bytes.",
+    "severity": "ERROR",
+    "line": 18,
+    "column": -1,
+    "procedure": "process",
+    "procedure_id": "process",
+    "procedure_start_line": 15,
+    "file": "buffer_overflow.c",
+    "bug_trace": [
+      {
+        "level": 0,
+        "filename": "buffer_overflow.c",
+        "line_number": 27,
+        "column_number": -1,
+        "description": "argc >= 2: passing argv[1] to process()"
+      },
+      {
+        "level": 0,
+        "filename": "buffer_overflow.c",
+        "line_number": 16,
+        "column_number": -1,
+        "description": "buf declared with size 16"
+      },
+      {
+        "level": 0,
+        "filename": "buffer_overflow.c",
+        "line_number": 18,
+        "column_number": -1,
+        "description": "strcpy(buf, src) — src may be longer than 16 bytes → buffer overrun"
+      }
+    ],
+    "key": "bof_process_18",
+    "hash": "778899aabbcc"
+  }
+]
