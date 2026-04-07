@@ -14,3 +14,7 @@ results/
 
 # macOS
 .DS_Store
+benchmarks/infer-out/
+benchmarks/samples/CWE416_Use_After_Free/
+benchmarks/samples/testcasesupport/
+benchmarks/samples/*.o

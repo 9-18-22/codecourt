@@ -115,6 +115,16 @@ class ASanVerifier:
             log.error("[%s] No resolved source path; cannot compile.", report.id)
             return ASanResult(Verdict.COMPILE_ERROR, stderr="Source file missing")
 
+        # Skip Juliet sub-files (63b, 64b, 51b etc.) - cannot compile standalone
+        if re.search(r'\d+[b-z]\.c$', str(source_path)):
+            log.info("[%s] Skipping: Juliet sub-file", report.id)
+            return ASanResult(Verdict.SKIPPED)
+
+        source_path = report.resolved_path
+        if source_path is None:
+            log.error("[%s] No resolved source path; cannot compile.", report.id)
+            return ASanResult(Verdict.COMPILE_ERROR, stderr="Source file missing")
+
         with tempfile.TemporaryDirectory(prefix="sv_asan_") as tmpdir:
             tmp = Path(tmpdir)
             return self._run_in_tmpdir(report, llm_result, source_path, tmp)
@@ -135,13 +145,13 @@ class ASanVerifier:
         # 2. Write any file inputs the LLM requested
         self._write_file_inputs(llm, tmp)
 
-        # 3. Compile
+        # 3. Compile  (pass original source path so we can find testcasesupport)
         binary = tmp / "target"
-        compile_result = self._compile(src_file, binary)
+        compile_result = self._compile(src_file, binary, source_root=source)
         if compile_result is not None:
             return compile_result
 
-        compile_cmd = self._make_compile_cmd(src_file, binary)
+        compile_cmd = self._make_compile_cmd(src_file, binary, source_root=source)
 
         # 4. Run
         return self._run(report, llm, binary, tmp, compile_cmd)
@@ -163,6 +173,19 @@ class ASanVerifier:
             )
             log.debug("[%s] Injected assertion: %s", report.id, llm.instrumentation_code)
 
+        # ── Juliet: inject main() if missing ─────────────────────────────────
+        if "int main(" not in src_content and "void main(" not in src_content:
+            func_name = source.stem
+            bad_func  = f"{func_name}_bad"
+            src_content += (
+                "\n/* Auto-generated main for ASan verification */\n"
+                "int main(void) {\n"
+                f"    {bad_func}();\n"
+                "    return 0;\n"
+                "}\n"
+            )
+            log.debug("[%s] Injected main() → %s()", report.id, bad_func)
+
         dst = tmp / source.name
         dst.write_text(src_content)
         return dst
@@ -170,6 +193,9 @@ class ASanVerifier:
     @staticmethod
     def _inject_assertion(source: str, bug_line: int, assertion: str) -> str:
         """Insert an assertion statement just before the bug line."""
+        if "#include <assert.h>" not in source:
+            source   = "#include <assert.h>\n" + source
+            bug_line += 1
         lines = source.splitlines(keepends=True)
         idx   = bug_line - 1
         if 0 <= idx < len(lines):
@@ -189,13 +215,33 @@ class ASanVerifier:
 
     # ── Compilation ───────────────────────────────────────────────────────────
 
-    def _make_compile_cmd(self, src: Path, out: Path) -> str:
-        flags = config.asan_flags
-        return f"{self._compiler} {flags} -o {out} {src}"
+    def _find_support_dir(self, source: Path) -> Optional[Path]:
+        """Find Juliet testcasesupport directory from original source path."""
+        for candidate in [
+            source.parent / "testcasesupport",
+            source.parent.parent / "testcasesupport",
+            source.parent.parent.parent / "testcasesupport",
+        ]:
+            if candidate.exists():
+                return candidate
+        return None
 
-    def _compile(self, src: Path, out: Path) -> Optional[ASanResult]:
+    def _make_compile_cmd(self, src: Path, out: Path, source_root: Optional[Path] = None) -> str:
+        flags      = config.asan_flags
+        extra_inc  = ""
+        extra_srcs = ""
+        lookup     = source_root or src
+        support    = self._find_support_dir(lookup)
+        if support:
+            import glob as _glob
+            extra_inc  = f"-I{support}"
+            c_files    = _glob.glob(str(support / "*.c"))
+            extra_srcs = " ".join(c_files)
+        return f"{self._compiler} {flags} {extra_inc} -o {out} {src} {extra_srcs}"
+
+    def _compile(self, src: Path, out: Path, source_root: Optional[Path] = None) -> Optional[ASanResult]:
         """Returns None on success, ASanResult(COMPILE_ERROR) on failure."""
-        cmd = self._make_compile_cmd(src, out)
+        cmd = self._make_compile_cmd(src, out, source_root=source_root)
         log.debug("Compile: %s", cmd)
         try:
             proc = subprocess.run(
@@ -234,7 +280,7 @@ class ASanVerifier:
         import platform as _platform
         if _platform.system() == "Darwin":
             # macOS: leak detection requires SIP disabled; disable it to avoid false errors
-            _asan_opts = "detect_leaks=0:print_stacktrace=1"
+            _asan_opts = "halt_on_error=0:detect_leaks=0:print_stacktrace=1"
         else:
             _asan_opts = "detect_leaks=1:abort_on_error=0:halt_on_error=0"
         env = {**os.environ, "ASAN_OPTIONS": _asan_opts, "UBSAN_OPTIONS": "print_stacktrace=1"}

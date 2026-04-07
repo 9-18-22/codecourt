@@ -23,17 +23,19 @@ class Config:
     # ── Dynamic verification ─────────────────────────────────────────────────
     timeout_seconds: int = 10          # per-execution timeout
     compiler: str = "gcc"              # "gcc" or "clang"
-    asan_flags: str = "-fsanitize=address,undefined -g -O1 -fno-omit-frame-pointer"
+    asan_flags: str = "-fsanitize=address,undefined -g -O1 -fno-omit-frame-pointer -DINCLUDEMAIN"
 
     # ── Bug types that ASan can verify directly ──────────────────────────────
     asan_verifiable_types: Tuple[str, ...] = (
         "NULL_DEREFERENCE",
+        "NULLPTR_DEREFERENCE",
         "USE_AFTER_FREE",
         "BUFFER_OVERRUN_L1",
         "BUFFER_OVERRUN_L2",
         "BUFFER_OVERRUN_L3",
         "BUFFER_OVERRUN_U",
-        "MEMORY_LEAK",          # checked via -fsanitize=leak
+        "MEMORY_LEAK",
+        "MEMORY_LEAK_C",
     )
 
     # Bug types that need assertion instrumentation instead
