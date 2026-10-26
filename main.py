@@ -64,7 +64,7 @@ class Pipeline:
         reports = self.parser.parse()
         if not reports:
             log.warning("No actionable bug reports found.")
-            return {}
+            return self.reporter.generate([])
 
         print(f"\n{'─'*60}")
         print(summarise_reports(reports))
@@ -174,8 +174,13 @@ def main() -> None:
 
     # Validate API key early
     if not args.dry_run and not config.active_api_key:
-        print("[ERROR] API_KEY is not set. "
-              "Export it before running:\n  export API_KEY=...")
+        key_name = {
+            "anthropic": "ANTHROPIC_API_KEY",
+            "openai": "OPENAI_API_KEY",
+            "gemini": "GEMINI_API_KEY",
+        }.get(config.llm_provider, "provider API key")
+        print(f"[ERROR] {key_name} is not set. "
+              f"Export it before running:\n  export {key_name}=...")
         sys.exit(1)
 
     if not args.report or not args.source_root:

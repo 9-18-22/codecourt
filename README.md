@@ -26,6 +26,7 @@ Judge는 추가 실험 또는 최종 판정을 선택합니다.
 
 - Python 3.10+
 - clang 또는 gcc
+- Docker (Infer 자동 실행)
 - Infer `report.json`
 - Anthropic, OpenAI 또는 Gemini API 키
 
@@ -35,7 +36,33 @@ export LLM_PROVIDER=anthropic
 export ANTHROPIC_API_KEY=...
 ```
 
-## 실행
+## 한 줄 실행: 소스 코드부터 최종 판정까지
+
+처음 사용하는 사람은 소스 프로젝트 경로만 넘기면 됩니다. Docker로 Infer를
+실행하고, 생성된 `report.json`을 CodeCourt에 연결한 뒤, 경고별 판정과 전체
+분류 비율을 출력합니다.
+
+```bash
+LLM_PROVIDER=anthropic ANTHROPIC_API_KEY="..." \
+./scripts/run_pipeline.sh /project results/realworld
+```
+
+실제 프로젝트가 여러 파일·라이브러리를 사용하면 빌드 설정을 세 번째 인자로
+추가합니다.
+
+```bash
+LLM_PROVIDER=anthropic ANTHROPIC_API_KEY="..." \
+./scripts/run_pipeline.sh /project results/realworld /project/build_config.json
+```
+
+최종 요약은 `results/realworld/verification_report.json`에 저장되고, 터미널에는
+`CONFIRMED_TRUE`, `UNRESOLVED`, `BOUNDED_FALSE_POSITIVE`별 최종 개수와 비율,
+그리고 `INVALID_EXPERIMENT` 라운드 횟수가 출력됩니다. Infer 결과는
+`results/realworld/infer-out/`에 보관됩니다.
+
+## 단계별 실행
+
+Infer 결과가 이미 있거나 각 단계를 따로 확인하려면 다음처럼 실행할 수 있습니다.
 
 ```bash
 python main.py \
@@ -49,6 +76,12 @@ python main.py \
 
 ```bash
 ./scripts/run_codecourt.sh /project/infer-out/report.json /project results/realworld /project/build_config.json
+```
+
+소스 프로젝트에서 Infer 결과만 생성하려면 다음을 사용합니다.
+
+```bash
+./scripts/run_infer.sh /project /project/infer-out
 ```
 
 주요 옵션:
