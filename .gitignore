@@ -1,20 +1,24 @@
-# API 키, 환경변수
+# Local configuration and secrets
 .env
 *.env
+build_config.json
 
-# Python
+# Python caches and test artifacts
 __pycache__/
-*.pyc
-*.pyo
+*.py[cod]
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
-# 결과 파일 (용량 크고 개인 결과라서)
-benchmarks/results/
+# Runtime output and logs
 results/
+artifacts/
+*.log
+
+# Virtual environments
+.venv/
+venv/
+env/
 
 # macOS
 .DS_Store
-benchmarks/infer-out/
-benchmarks/samples/CWE416_Use_After_Free/
-benchmarks/samples/testcasesupport/
-benchmarks/samples/*.o

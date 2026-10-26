@@ -114,7 +114,7 @@ class TestEndToEndPipeline:
         assert stats["llm_success_count"]   >= 1
 
         result = full_report["results"][0]
-        assert result["verdict"]     == "TP"
+        assert result["verdict"]     == "STRICT_TP"
         assert result["llm_success"] is True
 
     @patch("anthropic.Anthropic")

@@ -27,15 +27,21 @@ from pipeline.llm_generator import LLMResult
 COMPILER_AVAILABLE = bool(shutil.which("clang") or shutil.which("gcc"))
 
 
-def _make_report(bug_type: str = "NULL_DEREFERENCE", source: str = "") -> BugReport:
+def _make_report(
+    bug_type: str = "NULL_DEREFERENCE",
+    source: str = "",
+    procedure: str = "main",
+    file: str = "test.c",
+    line: int = 1,
+) -> BugReport:
     r = BugReport(
         bug_type  = bug_type,
         qualifier = "test",
         severity  = "ERROR",
-        line      = 1,
+        line      = line,
         column    = -1,
-        procedure = "main",
-        file      = "test.c",
+        procedure = procedure,
+        file      = file,
         bug_trace = [],
         source_code = source,
     )
@@ -85,19 +91,24 @@ class TestASanResultClassification:
         m = _ASAN_ERROR_RE.search(sample)
         assert m is not None
 
-    def test_classify_tp_on_asan_output(self):
+    def test_classify_strict_tp_on_top_frame_match(self):
         from pipeline.asan_verifier import ASanVerifier
         verifier = ASanVerifier.__new__(ASanVerifier)
+        report = _make_report(file="test.c", procedure="main")
         result = verifier._classify(
-            "ERROR: AddressSanitizer: heap-use-after-free\n#0 in main test.c:10",
+            "ERROR: AddressSanitizer: heap-use-after-free\n"
+            "#0 0x401abc in main /tmp/test.c:10",
             returncode=1,
             compile_cmd="clang ...",
             run_cmd="./target",
+            report=report,
         )
-        assert result.verdict   == Verdict.TRUE_POSITIVE
+        assert result.verdict == Verdict.STRICT_TP
+        assert result.match_level == "strict"
+        assert result.matched_frame == "main"
         assert "heap-use-after-free" in result.crash_type
 
-    def test_classify_unconfirmed_on_clean_exit(self):
+    def test_classify_likely_fp_on_clean_exit(self):
         from pipeline.asan_verifier import ASanVerifier
         verifier = ASanVerifier.__new__(ASanVerifier)
         result = verifier._classify(
@@ -105,10 +116,12 @@ class TestASanResultClassification:
             returncode=0,
             compile_cmd="",
             run_cmd="",
+            report=_make_report(),
         )
-        assert result.verdict == Verdict.UNCONFIRMED
+        assert result.verdict == Verdict.LIKELY_FP
+        assert result.match_level == "no_crash"
 
-    def test_classify_tp_on_negative_returncode(self):
+    def test_classify_family_tp_without_report_context(self):
         """Signal crash (e.g. SIGSEGV) → returncode < 0."""
         from pipeline.asan_verifier import ASanVerifier
         verifier = ASanVerifier.__new__(ASanVerifier)
@@ -118,8 +131,85 @@ class TestASanResultClassification:
             compile_cmd="",
             run_cmd="",
         )
-        assert result.verdict == Verdict.TRUE_POSITIVE
+        assert result.verdict == Verdict.FAMILY_TP
+        assert result.match_level == "family_no_proc"
         assert "signal" in result.crash_type
+
+
+    def test_classify_family_tp_on_call_chain_match(self):
+        from pipeline.asan_verifier import ASanVerifier
+        verifier = ASanVerifier.__new__(ASanVerifier)
+        report = _make_report(file="test.c", procedure="target_proc")
+        output = (
+            "ERROR: AddressSanitizer: SEGV on unknown address 0x0\n"
+            "#0 0x401abc in helper /tmp/test.c:10\n"
+            "#1 0x401def in target_proc /tmp/test.c:20\n"
+        )
+        result = verifier._classify(output, 1, "", "", report)
+        assert result.verdict == Verdict.FAMILY_TP
+        assert result.match_level == "family_chain"
+        assert result.matched_frame == "target_proc"
+        assert result.matched_line == 20
+
+    def test_classify_cross_detection_on_same_file_other_function(self):
+        from pipeline.asan_verifier import ASanVerifier
+        verifier = ASanVerifier.__new__(ASanVerifier)
+        report = _make_report(file="test.c", procedure="target_proc")
+        output = (
+            "ERROR: AddressSanitizer: SEGV on unknown address 0x0\n"
+            "#0 0x401abc in helper /tmp/test.c:10\n"
+        )
+        result = verifier._classify(output, 1, "", "", report)
+        assert result.verdict == Verdict.CROSS_DETECTION
+        assert result.match_level == "cross_proc"
+
+    def test_classify_cross_detection_on_different_file(self):
+        from pipeline.asan_verifier import ASanVerifier
+        verifier = ASanVerifier.__new__(ASanVerifier)
+        report = _make_report(file="test.c", procedure="main")
+        output = (
+            "ERROR: AddressSanitizer: SEGV on unknown address 0x0\n"
+            "#0 0x401abc in main /tmp/other.c:10\n"
+        )
+        result = verifier._classify(output, 1, "", "", report)
+        assert result.verdict == Verdict.CROSS_DETECTION
+        assert result.match_level == "diff_file"
+
+    def test_classify_family_tp_when_procedure_missing(self):
+        from pipeline.asan_verifier import ASanVerifier
+        verifier = ASanVerifier.__new__(ASanVerifier)
+        report = _make_report(file="test.c", procedure="")
+        output = (
+            "ERROR: AddressSanitizer: SEGV on unknown address 0x0\n"
+            "#0 0x401abc in helper /tmp/test.c:10\n"
+        )
+        result = verifier._classify(output, 1, "", "", report)
+        assert result.verdict == Verdict.FAMILY_TP
+        assert result.match_level == "family_no_proc"
+
+    def test_procedure_word_boundary_rejects_partial_function_name(self):
+        from pipeline.asan_verifier import ASanVerifier
+        verifier = ASanVerifier.__new__(ASanVerifier)
+        report = _make_report(file="func_pointer.c", procedure="func_pointer_011")
+        output = (
+            "ERROR: AddressSanitizer: SEGV on unknown address 0x0\n"
+            "#0 0x401abc in func_pointer_011_func_001 /tmp/func_pointer.c:10\n"
+        )
+        result = verifier._classify(output, 1, "", "", report)
+        assert result.verdict == Verdict.CROSS_DETECTION
+        assert result.match_level == "cross_proc"
+
+    def test_type_mismatch_does_not_change_verdict(self):
+        from pipeline.asan_verifier import ASanVerifier
+        verifier = ASanVerifier.__new__(ASanVerifier)
+        report = _make_report(bug_type="USE_AFTER_FREE", file="test.c", procedure="main")
+        output = (
+            "ERROR: AddressSanitizer: SEGV on unknown address 0x0\n"
+            "#0 0x401abc in main /tmp/test.c:10\n"
+        )
+        result = verifier._classify(output, 1, "", "", report)
+        assert result.verdict == Verdict.STRICT_TP
+        assert result.type_matched is False
 
 
 class TestSkipLogic:
@@ -174,14 +264,15 @@ class TestASanIntegration:
         )
         report = _make_report("NULL_DEREFERENCE")
         report.resolved_path = src
+        report.file = str(src)
 
         verifier = ASanVerifier()
         result   = verifier.verify(report, _make_llm_result())
 
-        assert result.verdict == Verdict.TRUE_POSITIVE
+        assert result.verdict == Verdict.STRICT_TP
 
     def test_clean_program_is_unconfirmed(self, tmp_path):
-        """A correct program should yield UNCONFIRMED (not a TP)."""
+        """A correct program should yield LIKELY_FP (not a TP)."""
         src = tmp_path / "ok.c"
         src.write_text(
             "#include <stdio.h>\n"
@@ -192,11 +283,12 @@ class TestASanIntegration:
         )
         report = _make_report("NULL_DEREFERENCE")
         report.resolved_path = src
+        report.file = str(src)
 
         verifier = ASanVerifier()
         result   = verifier.verify(report, _make_llm_result())
 
-        assert result.verdict == Verdict.UNCONFIRMED
+        assert result.verdict == Verdict.LIKELY_FP
 
     def test_compile_error_on_bad_source(self, tmp_path):
         src = tmp_path / "bad.c"
@@ -204,6 +296,7 @@ class TestASanIntegration:
 
         report = _make_report("NULL_DEREFERENCE")
         report.resolved_path = src
+        report.file = str(src)
 
         verifier = ASanVerifier()
         result   = verifier.verify(report, _make_llm_result())
@@ -225,12 +318,13 @@ class TestASanIntegration:
         )
         report = _make_report("BUFFER_OVERRUN_L1")
         report.resolved_path = src
+        report.file = str(src)
 
         llm = _make_llm_result(input_type="none")
         verifier = ASanVerifier()
         result   = verifier.verify(report, llm)
 
-        assert result.verdict == Verdict.TRUE_POSITIVE
+        assert result.verdict == Verdict.STRICT_TP
 
     def test_use_after_free_detected(self, tmp_path):
         src = tmp_path / "uaf.c"
@@ -247,11 +341,12 @@ class TestASanIntegration:
         )
         report = _make_report("USE_AFTER_FREE")
         report.resolved_path = src
+        report.file = str(src)
 
         verifier = ASanVerifier()
         result   = verifier.verify(report, _make_llm_result())
 
-        assert result.verdict == Verdict.TRUE_POSITIVE
+        assert result.verdict == Verdict.STRICT_TP
 
     def test_stdin_input_type(self, tmp_path):
         """Program reading from stdin triggered via LLM stdin_data."""
@@ -270,12 +365,13 @@ class TestASanIntegration:
         )
         report = _make_report("BUFFER_OVERRUN_L1")
         report.resolved_path = src
+        report.file = str(src)
 
         llm = _make_llm_result(input_type="stdin", stdin_data="4\n")
         verifier = ASanVerifier()
         result   = verifier.verify(report, llm)
 
-        assert result.verdict == Verdict.TRUE_POSITIVE
+        assert result.verdict == Verdict.STRICT_TP
 
     def test_timeout_handled_gracefully(self, tmp_path):
         """Infinite-loop program should result in TIMEOUT, not a hang."""
@@ -286,6 +382,7 @@ class TestASanIntegration:
         )
         report = _make_report("NULL_DEREFERENCE")
         report.resolved_path = src
+        report.file = str(src)
 
         from config import config as cfg
         original_timeout = cfg.timeout_seconds

@@ -1,8 +1,8 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # Dockerfile  –  Infer + Clang/ASan environment
 #
-# Build:  docker build -t static-verifier -f docker/Dockerfile .
-# Run:    docker run --rm -it -v $(pwd):/workspace static-verifier bash
+# Build:  docker build -t codecourt -f docker/Dockerfile .
+# Run:    docker run --rm -it -v $(pwd):/workspace codecourt bash
 # ─────────────────────────────────────────────────────────────────────────────
 
 FROM facebook/infer:latest

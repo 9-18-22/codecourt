@@ -1,6 +1,6 @@
 """
-Static Verifier Pipeline  –  Main Entry Point
-==============================================
+CodeCourt  –  Main Entry Point
+==============================
 
 Usage examples
 --------------
@@ -13,8 +13,8 @@ python main.py --report report.json --source-root . --bug-types NULL_DEREFERENCE
 # Dry-run: parse and display bugs without calling LLM/ASan
 python main.py --report report.json --source-root . --dry-run
 
-# Benchmark mode (runs on bundled sample C files)
-python main.py --benchmark
+# CodeCourt mode for a real-world project
+python main.py --codecourt --report infer-out/report.json --source-root src/
 """
 
 from __future__ import annotations
@@ -24,10 +24,11 @@ import sys
 from pathlib import Path
 
 from config import config
-from pipeline.asan_verifier import ASanResult, ASanVerifier, Verdict
+from pipeline.asan_verifier import ASanResult, ASanVerifier, Verdict, is_tp_verdict
 from pipeline.infer_parser import BugReport, InferParser, summarise_reports
 from pipeline.llm_generator import LLMGenerator, LLMResult
 from pipeline.reporter import Reporter
+from pipeline.codecourt import CodeCourt, CourtOptions
 from utils.logger import get_logger, setup_file_logging
 
 log = get_logger(__name__)
@@ -37,7 +38,7 @@ log = get_logger(__name__)
 
 class Pipeline:
     """
-    Connects InferParser → LLMGenerator → ASanVerifier → Reporter.
+    Orchestrates CodeCourt and the legacy baseline around InferParser/Reporter.
     """
 
     def __init__(
@@ -47,12 +48,16 @@ class Pipeline:
         bug_types: list[str] | None = None,
         output_dir: str = "results",
         dry_run: bool = False,
+        codecourt: bool = False,
+        court_options: CourtOptions | None = None,
     ) -> None:
         self.parser    = InferParser(report_path, source_root, bug_types)
-        self.generator = None if dry_run else LLMGenerator()
-        self.verifier  = None if dry_run else ASanVerifier()
+        self.codecourt = codecourt
+        self.generator = None if dry_run or codecourt else LLMGenerator()
+        self.verifier  = None if dry_run or codecourt else ASanVerifier()
         self.reporter  = Reporter(output_dir)
         self.dry_run   = dry_run
+        self.court = CodeCourt(output_dir, court_options) if codecourt and not dry_run else None
 
     def run(self) -> dict:
         # 1. Parse Infer report
@@ -69,9 +74,12 @@ class Pipeline:
             log.info("Dry-run mode: skipping LLM and ASan steps.")
             return self.reporter.generate(reports)
 
-        # 2. LLM + ASan per bug
+        # 2. Validate each warning using CodeCourt or the legacy baseline.
         for report in reports:
-            self._process_bug(report)
+            if self.codecourt:
+                self.court.adjudicate(report)
+            else:
+                self._process_bug(report)
 
         # 3. Generate report
         return self.reporter.generate(reports)
@@ -94,49 +102,26 @@ class Pipeline:
         report.asan_result = asan_result.to_dict()
 
         verdict_emoji = {
-            Verdict.TRUE_POSITIVE : "🔴 TRUE POSITIVE",
-            Verdict.UNCONFIRMED   : "🟡 UNCONFIRMED",
-            Verdict.COMPILE_ERROR : "⚙️  COMPILE ERROR",
-            Verdict.TIMEOUT       : "⏱  TIMEOUT",
-            Verdict.SKIPPED       : "⏭  SKIPPED",
+            Verdict.STRICT_TP       : "🔴 STRICT TP",
+            Verdict.FAMILY_TP       : "🟠 FAMILY TP",
+            Verdict.CROSS_DETECTION : "🟣 CROSS DETECTION",
+            Verdict.LIKELY_FP       : "🟡 LIKELY FP",
+            Verdict.COMPILE_ERROR   : "⚙️  COMPILE ERROR",
+            Verdict.RUNTIME_ERROR   : "⚙️  RUNTIME ERROR",
+            Verdict.TIMEOUT         : "⏱  TIMEOUT",
+            Verdict.SKIPPED         : "⏭  SKIPPED",
         }.get(asan_result.verdict, str(asan_result.verdict))
 
         log.info("[%s] Verdict: %s  (crash_type=%s)",
                  report.id, verdict_emoji, asan_result.crash_type or "none")
 
 
-# ── Benchmark helper ──────────────────────────────────────────────────────────
-
-def run_benchmark() -> None:
-    """
-    Run the pipeline on the bundled benchmark samples.
-    Requires that the samples have already been analysed with Infer.
-    """
-    benchmark_dir = Path(__file__).parent / "benchmarks"
-    report_path   = benchmark_dir / "infer-out" / "report.json"
-    source_root   = benchmark_dir / "samples"
-
-    if not report_path.exists():
-        print("\n[!] Benchmark Infer report not found.")
-        print(f"    Please run Infer on the samples first:")
-        print(f"    cd {benchmark_dir}")
-        print(f"    bash ../scripts/run_infer.sh samples/ infer-out/")
-        sys.exit(1)
-
-    pipeline = Pipeline(
-        report_path = str(report_path),
-        source_root = str(source_root),
-        output_dir  = str(benchmark_dir / "results"),
-    )
-    pipeline.run()
-
-
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="static-verifier",
-        description="Verify Infer static analysis warnings with LLM + ASan",
+        prog="codecourt",
+        description="Verify Infer static-analysis warnings with CodeCourt's multi-agent evidence loop",
     )
     p.add_argument("--report",      help="Path to Infer's report.json")
     p.add_argument("--source-root", help="Root directory of the source code")
@@ -156,14 +141,25 @@ def build_parser() -> argparse.ArgumentParser:
         help="Parse and list bugs only; skip LLM and ASan",
     )
     p.add_argument(
-        "--benchmark",
-        action="store_true",
-        help="Run on bundled benchmark samples",
-    )
-    p.add_argument(
         "--log-file",
         help="Write detailed logs to this file",
     )
+
+    p.add_argument(
+        "--codecourt", action="store_true",
+        help="Run execution-evidence adversarial validation for real-world code",
+    )
+    p.add_argument(
+        "--max-rounds", type=int, default=3,
+        help="Maximum CodeCourt prosecutor/defense rounds (default: 3)",
+    )
+    p.add_argument(
+        "--max-executions", type=int, default=6,
+        help="Maximum program executions per warning, including replays",
+    )
+    p.add_argument("--court-time-budget", type=float, default=180,
+                   help="Maximum seconds per warning")
+    p.add_argument("--build-config", help="JSON file with include_dirs, extra_sources, compile_flags, link_flags")
     return p
 
 
@@ -174,19 +170,35 @@ def main() -> None:
     if args.log_file:
         setup_file_logging(Path(args.log_file))
 
+    config.dataset_mode = "generic_realworld"
+
     # Validate API key early
-    if not args.dry_run and not args.benchmark and not config.anthropic_api_key:
-        print("[ERROR] ANTHROPIC_API_KEY is not set. "
-              "Export it before running:\n  export ANTHROPIC_API_KEY=sk-...")
+    if not args.dry_run and not config.active_api_key:
+        print("[ERROR] API_KEY is not set. "
+              "Export it before running:\n  export API_KEY=...")
         sys.exit(1)
 
-    if args.benchmark:
-        run_benchmark()
-        return
-
     if not args.report or not args.source_root:
-        print("[ERROR] --report and --source-root are required unless --benchmark is used.")
+        print("[ERROR] --report and --source-root are required.")
         build_parser().print_help()
+        sys.exit(1)
+
+    build_config = {}
+    if args.build_config:
+        import json
+        try:
+            build_config = json.loads(Path(args.build_config).read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            print(f"[ERROR] Invalid --build-config: {exc}")
+            sys.exit(1)
+    try:
+        court_options = CourtOptions(max_rounds=args.max_rounds,
+                                     max_executions=args.max_executions,
+                                     max_seconds=args.court_time_budget,
+                                     timeout_seconds=config.timeout_seconds,
+                                     build_config=build_config)
+    except ValueError as exc:
+        print(f"[ERROR] Invalid CodeCourt option: {exc}")
         sys.exit(1)
 
     pipeline = Pipeline(
@@ -195,6 +207,8 @@ def main() -> None:
         bug_types   = args.bug_types,
         output_dir  = args.output_dir,
         dry_run     = args.dry_run,
+        codecourt   = args.codecourt,
+        court_options = court_options,
     )
     pipeline.run()
 
