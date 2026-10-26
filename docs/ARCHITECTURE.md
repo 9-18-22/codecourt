@@ -2,11 +2,19 @@
 
 ## Runtime boundary
 
-`main.py` only handles CLI configuration and starts `Pipeline`.
+`scripts/run_pipeline.sh` is the end-to-end entry point: it runs Infer in Docker,
+then passes the generated report to `main.py`. `main.py` only handles CLI
+configuration and starts `Pipeline`.
 `Pipeline` parses Infer warnings, then selects either the CodeCourt path or the
 legacy baseline path. CodeCourt owns the real-world validation lifecycle.
 
 ```text
+Source project
+        |
+        v
+  Infer (Docker)
+        |
+        v
 Infer report + source root
         |
         v
@@ -49,7 +57,9 @@ Infer report + source root
 - `pipeline/codecourt/court.py`
   - Coordinates rounds, duplicate detection, execution budgets, feedback, and verdicts.
 - `pipeline/reporter.py`
-  - Produces the aggregate `verification_report.json`.
+  - Produces the aggregate `verification_report.json` and CodeCourt verdict percentages.
+- `scripts/run_pipeline.sh`
+  - Connects Infer output and CodeCourt into one source-root-to-report command.
 
 ## Experiment lifecycle
 

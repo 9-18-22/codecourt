@@ -31,6 +31,12 @@ def _make_record(report: BugReport) -> dict:
     file_inputs = llm.get("file_inputs", {}) if isinstance(llm.get("file_inputs", {}), dict) else {}
 
     court = getattr(report, "court_result", None)
+    court_rounds = court.get("rounds", []) if court else []
+    agent_success = bool(court_rounds and any("plan" in round_ for round_ in court_rounds))
+    invalid_rounds = sum(
+        1 for round_ in court_rounds
+        if round_.get("experiment_status") == "INVALID_EXPERIMENT"
+    )
     return {
         "id":          report.id,
         "bug_type":    report.bug_type,
@@ -39,7 +45,8 @@ def _make_record(report: BugReport) -> dict:
         "procedure":   report.procedure,
         "qualifier":   report.qualifier,
         # LLM
-        "llm_success":    bool(llm),
+        "llm_success":    bool(llm) or agent_success,
+        "agent_success":  agent_success,
         "llm_confidence": llm.get("confidence", "N/A"),
         "llm_input_type": llm.get("input_type", "N/A"),
         "llm_reasoning":  llm.get("reasoning", "")[:300],
@@ -70,6 +77,7 @@ def _make_record(report: BugReport) -> dict:
         "court_verdict": court.get("verdict", "N/A") if court else "N/A",
         "court_reason": court.get("reason", "") if court else "",
         "court_rounds": len(court.get("rounds", [])) if court else 0,
+        "court_invalid_experiment_rounds": invalid_rounds,
         "court_executions": court.get("executions", 0) if court else 0,
         "court_result": court,
     }
@@ -108,29 +116,60 @@ class Reporter:
         total        = len(records)
         llm_ok       = sum(1 for r in records if r["llm_success"])
         verdicts     = Counter(r["verdict"] for r in records)
-        strict_tp    = (
-            verdicts.get(Verdict.STRICT_TP.value, 0)
-            + verdicts.get("TP", 0)
-            + verdicts.get("TRUE_POSITIVE", 0)
-        )
-        family_tp    = verdicts.get(Verdict.FAMILY_TP.value, 0)
-        tp           = strict_tp + family_tp
-        cross        = verdicts.get(Verdict.CROSS_DETECTION.value, 0)
-        likely_fp    = verdicts.get(Verdict.LIKELY_FP.value, 0) + verdicts.get("UNCONFIRMED", 0)
-        unconfirmed  = likely_fp
+        court_mode   = any(r["court_verdict"] != "N/A" for r in records)
         bug_types    = Counter(r["bug_type"] for r in records)
         court_verdicts = Counter(r["court_verdict"] for r in records if r["court_verdict"] != "N/A")
-        verdict_denominator = tp + cross + likely_fp
-        type_consistent_tp = sum(
-            1 for r in records
-            if is_tp_verdict(r["verdict"]) and r.get("type_matched") is True
-        )
-        type_mismatch_tp = tp - type_consistent_tp
+
+        if court_mode:
+            # CodeCourt has its own final verdict vocabulary.  Do not report
+            # legacy ASan counters (which are intentionally N/A in this mode)
+            # as if they were CodeCourt classifications.
+            court_confirmed_true = court_verdicts.get("CONFIRMED_TRUE", 0)
+            court_unresolved = court_verdicts.get("UNRESOLVED", 0)
+            court_bounded_false_positive = court_verdicts.get("BOUNDED_FALSE_POSITIVE", 0)
+            court_invalid_experiment = court_verdicts.get("INVALID_EXPERIMENT", 0)
+            strict_tp = court_confirmed_true
+            family_tp = 0
+            tp = court_confirmed_true
+            cross = 0
+            likely_fp = court_bounded_false_positive
+            unconfirmed = court_unresolved
+            type_consistent_tp = 0
+            type_mismatch_tp = 0
+            verdict_denominator = total
+            primary_verdicts = court_verdicts
+        else:
+            strict_tp = (
+                verdicts.get(Verdict.STRICT_TP.value, 0)
+                + verdicts.get("TP", 0)
+                + verdicts.get("TRUE_POSITIVE", 0)
+            )
+            family_tp = verdicts.get(Verdict.FAMILY_TP.value, 0)
+            tp = strict_tp + family_tp
+            cross = verdicts.get(Verdict.CROSS_DETECTION.value, 0)
+            likely_fp = verdicts.get(Verdict.LIKELY_FP.value, 0) + verdicts.get("UNCONFIRMED", 0)
+            unconfirmed = likely_fp
+            verdict_denominator = tp + cross + likely_fp
+            type_consistent_tp = sum(
+                1 for r in records
+                if is_tp_verdict(r["verdict"]) and r.get("type_matched") is True
+            )
+            type_mismatch_tp = tp - type_consistent_tp
+            court_confirmed_true = court_unresolved = 0
+            court_bounded_false_positive = court_invalid_experiment = 0
+            primary_verdicts = verdicts
+
+        agent_success = sum(1 for r in records if r.get("agent_success", False))
+        invalid_rounds = sum(r.get("court_invalid_experiment_rounds", 0) for r in records)
+        total_rounds = sum(r.get("court_rounds", 0) for r in records)
 
         stats = {
+            "mode":                  "codecourt" if court_mode else "baseline",
             "total_bugs":            total,
             "llm_success_count":     llm_ok,
             "llm_success_rate":      _pct(llm_ok, total),
+            "agent_success_count":   agent_success,
+            "agent_success_rate":    _pct(agent_success, total),
             "true_positive_count":   tp,
             "true_positive_rate":    _pct(tp, total),
             "type_consistent_tp_count": type_consistent_tp,
@@ -151,9 +190,19 @@ class Reporter:
             "unconfirmed_count":     unconfirmed,
             "unconfirmed_rate":      _pct(unconfirmed, total),
             "fp_reduction_rate":     _pct(tp, verdict_denominator),
-            "verdicts":              dict(verdicts),
+            "verdicts":              dict(primary_verdicts),
             "bug_type_breakdown":    dict(bug_types),
             "court_verdicts":        dict(court_verdicts),
+            "court_confirmed_true_count": court_confirmed_true,
+            "court_confirmed_true_rate":  _pct(court_confirmed_true, total),
+            "court_unresolved_count":      court_unresolved,
+            "court_unresolved_rate":       _pct(court_unresolved, total),
+            "court_bounded_false_positive_count": court_bounded_false_positive,
+            "court_bounded_false_positive_rate":  _pct(court_bounded_false_positive, total),
+            "court_invalid_experiment_count": court_invalid_experiment,
+            "court_invalid_experiment_rate":  _pct(court_invalid_experiment, total),
+            "court_invalid_experiment_round_count": invalid_rounds,
+            "court_invalid_experiment_round_rate": _pct(invalid_rounds, total_rounds),
         }
 
         return stats
@@ -167,32 +216,43 @@ class Reporter:
         print("  CODECOURT  –  PIPELINE RESULTS")
         print(sep)
         print(f"  Total bugs analysed     : {stats['total_bugs']}")
-        print(f"  LLM input generation    : {stats['llm_success_count']} / {stats['total_bugs']}"
-              f"  ({stats['llm_success_rate']:.1f}%)")
-        if stats.get("court_verdicts"):
-            print("  CodeCourt verdicts:")
+        if stats.get("mode") == "codecourt":
+            print(f"  Agent processing        : {stats['agent_success_count']} / {stats['total_bugs']}"
+                  f"  ({stats['agent_success_rate']:.1f}%)")
+            print("  CodeCourt classifications:")
             for verdict, count in sorted(stats["court_verdicts"].items()):
-                print(f"    {verdict:<26} {count}")
-        print(f"  True Positives (ASan TP): {stats['true_positive_count']}"
-              f"  ({stats['true_positive_rate']:.1f}%)")
-        print(f"    Type-consistent TP    : {stats['type_consistent_tp_count']}"
-              f"  ({stats['type_consistent_tp_rate']:.1f}% of all, "
-              f"{stats['type_consistent_tp_share_of_tp']:.1f}% of TP)")
-        print(f"    Type-mismatch TP      : {stats['type_mismatch_tp_count']}"
-              f"  ({stats['type_mismatch_tp_rate']:.1f}% of all)")
-        print(f"    STRICT_TP             : {stats['strict_tp_count']}"
-              f"  ({stats['strict_tp_rate']:.1f}% of all, "
-              f"{stats['strict_tp_share_of_tp']:.1f}% of TP)")
-        print(f"    FAMILY_TP             : {stats['family_tp_count']}"
-              f"  ({stats['family_tp_rate']:.1f}% of all, "
-              f"{stats['family_tp_share_of_tp']:.1f}% of TP)")
-        print(f"  Cross Detection         : {stats['cross_detection_count']}"
-              f"  ({stats['cross_detection_rate']:.1f}%)")
-        print(f"  Likely FP               : {stats['likely_fp_count']}"
-              f"  ({stats['likely_fp_rate']:.1f}%)")
-        print(f"  Unconfirmed (FP cand.)  : {stats['unconfirmed_count']}"
-              f"  ({stats['unconfirmed_rate']:.1f}%)")
-        print(f"  FP Reduction Rate       : {stats['fp_reduction_rate']:.1f}%")
+                print(f"    {verdict:<26} {count} ({_pct(count, stats['total_bugs']):.1f}%)")
+            print(f"  Confirmed true          : {stats['court_confirmed_true_count']}"
+                  f"  ({stats['court_confirmed_true_rate']:.1f}%)")
+            print(f"  Unresolved              : {stats['court_unresolved_count']}"
+                  f"  ({stats['court_unresolved_rate']:.1f}%)")
+            print(f"  Bounded false positive  : {stats['court_bounded_false_positive_count']}"
+                  f"  ({stats['court_bounded_false_positive_rate']:.1f}%)")
+            print(f"  Invalid experiment rounds: {stats['court_invalid_experiment_round_count']}"
+                  f"  ({stats['court_invalid_experiment_round_rate']:.1f}% of rounds)")
+        else:
+            print(f"  LLM input generation    : {stats['llm_success_count']} / {stats['total_bugs']}"
+                  f"  ({stats['llm_success_rate']:.1f}%)")
+            print(f"  True Positives (ASan TP): {stats['true_positive_count']}"
+                  f"  ({stats['true_positive_rate']:.1f}%)")
+            print(f"    Type-consistent TP    : {stats['type_consistent_tp_count']}"
+                  f"  ({stats['type_consistent_tp_rate']:.1f}% of all, "
+                  f"{stats['type_consistent_tp_share_of_tp']:.1f}% of TP)")
+            print(f"    Type-mismatch TP      : {stats['type_mismatch_tp_count']}"
+                  f"  ({stats['type_mismatch_tp_rate']:.1f}% of all)")
+            print(f"    STRICT_TP             : {stats['strict_tp_count']}"
+                  f"  ({stats['strict_tp_rate']:.1f}% of all, "
+                  f"{stats['strict_tp_share_of_tp']:.1f}% of TP)")
+            print(f"    FAMILY_TP             : {stats['family_tp_count']}"
+                  f"  ({stats['family_tp_rate']:.1f}% of all, "
+                  f"{stats['family_tp_share_of_tp']:.1f}% of TP)")
+            print(f"  Cross Detection         : {stats['cross_detection_count']}"
+                  f"  ({stats['cross_detection_rate']:.1f}%)")
+            print(f"  Likely FP               : {stats['likely_fp_count']}"
+                  f"  ({stats['likely_fp_rate']:.1f}%)")
+            print(f"  Unconfirmed (FP cand.)  : {stats['unconfirmed_count']}"
+                  f"  ({stats['unconfirmed_rate']:.1f}%)")
+            print(f"  FP Reduction Rate       : {stats['fp_reduction_rate']:.1f}%")
 
         print()
         print("  Bug type breakdown:")

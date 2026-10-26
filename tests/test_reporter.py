@@ -105,6 +105,35 @@ class TestReporter:
         assert stats["likely_fp_count"]      == 1
         assert stats["llm_success_count"]   == 2
 
+    def test_codecourt_statistics_use_court_verdicts(self, tmp_path):
+        confirmed = _make_report()
+        confirmed._asan_obj = None
+        confirmed.court_result = {
+            "verdict": "CONFIRMED_TRUE",
+            "reason": "matching replay",
+            "rounds": [{"plan": {"mode": "original"}}],
+            "executions": 2,
+        }
+        unresolved = _make_report(verdict=Verdict.LIKELY_FP)
+        unresolved._asan_obj = None
+        unresolved.court_result = {
+            "verdict": "UNRESOLVED",
+            "reason": "budget exhausted",
+            "rounds": [{"experiment_status": "VALID"}],
+            "executions": 1,
+        }
+
+        full = Reporter(output_dir=tmp_path).generate([confirmed, unresolved])
+        stats = full["statistics"]
+
+        assert stats["mode"] == "codecourt"
+        assert stats["court_confirmed_true_count"] == 1
+        assert stats["court_confirmed_true_rate"] == 50.0
+        assert stats["court_unresolved_count"] == 1
+        assert stats["court_unresolved_rate"] == 50.0
+        assert stats["true_positive_count"] == 1
+        assert stats["verdicts"] == {"CONFIRMED_TRUE": 1, "UNRESOLVED": 1}
+
     def test_rates_are_percentages(self, tmp_path):
         reports = [_make_report(verdict=Verdict.STRICT_TP)] * 3
         reporter = Reporter(output_dir=tmp_path)
