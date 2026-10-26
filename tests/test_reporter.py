@@ -25,7 +25,7 @@ def _make_report(
     file: str = "src/foo.c",
     line: int = 42,
     llm_ok: bool = True,
-    verdict: Verdict = Verdict.TRUE_POSITIVE,
+    verdict: Verdict = Verdict.STRICT_TP,
 ) -> BugReport:
     r = BugReport(
         bug_type  = bug_type,
@@ -36,13 +36,30 @@ def _make_report(
         procedure = "main",
         file      = file,
     )
-    r.llm_result = {"confidence": "high", "input_type": "args", "reasoning": "test"} if llm_ok else None
+    r.llm_result = {
+        "confidence": "high",
+        "input_type": "args",
+        "reasoning": "test",
+        "attempt": 2,
+        "_attempt_history": [
+            {"attempt": 1, "status": "retry", "confidence": "low"},
+            {"attempt": 2, "status": "accepted", "confidence": "high"},
+        ],
+        "args": ["42"],
+        "stdin_data": "",
+        "file_inputs": {},
+        "expected_crash": "SEGV",
+    } if llm_ok else None
     r._asan_obj  = ASanResult(
         verdict    = verdict,
-        crash_type = "heap-use-after-free" if verdict == Verdict.TRUE_POSITIVE else "",
+        crash_type = "heap-use-after-free" if verdict in (Verdict.STRICT_TP, Verdict.FAMILY_TP) else "",
         crash_line = "foo.c:42",
         compile_cmd = "clang ...",
         run_cmd     = "./target",
+        match_level = "strict" if verdict == Verdict.STRICT_TP else "",
+        type_matched = verdict in (Verdict.STRICT_TP, Verdict.FAMILY_TP),
+        matched_frame = "main" if verdict == Verdict.STRICT_TP else "",
+        matched_line = 42 if verdict == Verdict.STRICT_TP else 0,
     )
     return r
 
@@ -59,7 +76,7 @@ class TestReporter:
         assert output.exists()
 
     def test_json_structure(self, tmp_path):
-        reports = [_make_report(), _make_report(verdict=Verdict.UNCONFIRMED)]
+        reports = [_make_report(), _make_report(verdict=Verdict.LIKELY_FP)]
         reporter = Reporter(output_dir=tmp_path)
         full_report = reporter.generate(reports)
 
@@ -70,9 +87,9 @@ class TestReporter:
 
     def test_statistics_counts(self, tmp_path):
         reports = [
-            _make_report(verdict=Verdict.TRUE_POSITIVE),
-            _make_report(verdict=Verdict.TRUE_POSITIVE),
-            _make_report(verdict=Verdict.UNCONFIRMED, llm_ok=False),
+            _make_report(verdict=Verdict.STRICT_TP),
+            _make_report(verdict=Verdict.FAMILY_TP),
+            _make_report(verdict=Verdict.LIKELY_FP, llm_ok=False),
         ]
         reporter = Reporter(output_dir=tmp_path)
         full = reporter.generate(reports)
@@ -80,11 +97,16 @@ class TestReporter:
 
         assert stats["total_bugs"]          == 3
         assert stats["true_positive_count"] == 2
+        assert stats["strict_tp_count"]     == 1
+        assert stats["family_tp_count"]     == 1
+        assert stats["strict_tp_share_of_tp"] == 50.0
+        assert stats["family_tp_share_of_tp"] == 50.0
         assert stats["unconfirmed_count"]   == 1
+        assert stats["likely_fp_count"]      == 1
         assert stats["llm_success_count"]   == 2
 
     def test_rates_are_percentages(self, tmp_path):
-        reports = [_make_report(verdict=Verdict.TRUE_POSITIVE)] * 3
+        reports = [_make_report(verdict=Verdict.STRICT_TP)] * 3
         reporter = Reporter(output_dir=tmp_path)
         full = reporter.generate(reports)
         stats = full["statistics"]
@@ -111,11 +133,17 @@ class TestReporter:
         full = reporter.generate(reports)
         rec = full["results"][0]
 
-        for field in ("id", "bug_type", "file", "line", "verdict", "llm_success"):
+        for field in (
+            "id", "bug_type", "file", "line", "verdict", "llm_success",
+            "llm_attempt", "llm_attempt_count", "llm_attempt_history",
+            "match_level", "type_matched", "matched_frame", "matched_line",
+        ):
             assert field in rec
+        assert rec["llm_attempt"] == 2
+        assert rec["llm_attempt_count"] == 2
 
     def test_handles_missing_llm_result(self, tmp_path):
-        r = _make_report(llm_ok=False, verdict=Verdict.UNCONFIRMED)
+        r = _make_report(llm_ok=False, verdict=Verdict.LIKELY_FP)
         reporter = Reporter(output_dir=tmp_path)
         full = reporter.generate([r])
         rec  = full["results"][0]

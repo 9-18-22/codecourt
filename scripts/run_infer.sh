@@ -9,7 +9,7 @@
 #   bash scripts/run_infer.sh <source_dir> <output_dir>
 #
 # Example:
-#   bash scripts/run_infer.sh benchmarks/samples/ benchmarks/infer-out/
+#   bash scripts/run_infer.sh /project /project/infer-out/
 # ─────────────────────────────────────────────────────────────────────────────
 
 set -euo pipefail
@@ -18,8 +18,8 @@ SOURCE_DIR="${1:?Usage: $0 <source_dir> <output_dir>}"
 OUTPUT_DIR="${2:?Usage: $0 <source_dir> <output_dir>}"
 
 ABS_SOURCE="$(realpath "$SOURCE_DIR")"
-ABS_OUTPUT="$(realpath "$OUTPUT_DIR")"
-mkdir -p "$ABS_OUTPUT"
+mkdir -p "$OUTPUT_DIR"
+ABS_OUTPUT="$(cd "$OUTPUT_DIR" && pwd)"
 
 echo "═══════════════════════════════════════════════════════"
 echo "  Running Infer on: $ABS_SOURCE"
@@ -27,7 +27,8 @@ echo "  Output dir:       $ABS_OUTPUT"
 echo "═══════════════════════════════════════════════════════"
 
 # ── Detect all C/C++ files ────────────────────────────────────────────────────
-C_FILES=$(find "$ABS_SOURCE" -name "*.c" -o -name "*.cpp" | tr '\n' ' ')
+C_FILES=$(find "$ABS_SOURCE" -name "*.c" -o -name "*.cpp" | sed "s|$ABS_SOURCE/||" | tr '\n' ' ')
+
 if [ -z "$C_FILES" ]; then
     echo "[!] No C/C++ files found in $ABS_SOURCE"
     exit 1
@@ -52,7 +53,7 @@ echo "   report.json → $ABS_OUTPUT/report.json"
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 if command -v python3 &>/dev/null; then
-    python3 - <<'EOF'
+    python3 - "$ABS_OUTPUT/report.json" <<'EOF'
 import json, sys
 try:
     with open(sys.argv[1]) as f:

@@ -1,0 +1,15 @@
+{
+  "include_dirs": [
+    "/absolute/path/to/project/include"
+  ],
+  "extra_sources": [
+    "/absolute/path/to/project/src/dependency.c"
+  ],
+  "compile_flags": [
+    "-DPROJECT_FEATURE=1"
+  ],
+  "link_flags": [
+    "-lpthread",
+    "-lm"
+  ]
+}
