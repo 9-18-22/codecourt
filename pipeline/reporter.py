@@ -164,7 +164,7 @@ class Reporter:
     def _print_summary(stats: dict, records: list) -> None:
         sep = "=" * 70
         print(f"\n{sep}")
-        print("  STATIC VERIFIER  –  PIPELINE RESULTS")
+        print("  CODECOURT  –  PIPELINE RESULTS")
         print(sep)
         print(f"  Total bugs analysed     : {stats['total_bugs']}")
         print(f"  LLM input generation    : {stats['llm_success_count']} / {stats['total_bugs']}"

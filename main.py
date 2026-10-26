@@ -1,6 +1,6 @@
 """
-Static Verifier Pipeline  –  Main Entry Point
-==============================================
+CodeCourt  –  Main Entry Point
+==============================
 
 Usage examples
 --------------
@@ -38,7 +38,7 @@ log = get_logger(__name__)
 
 class Pipeline:
     """
-    Connects InferParser → LLMGenerator → ASanVerifier → Reporter.
+    Orchestrates CodeCourt and the legacy baseline around InferParser/Reporter.
     """
 
     def __init__(
@@ -120,8 +120,8 @@ class Pipeline:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="static-verifier",
-        description="Verify Infer static analysis warnings with LLM + ASan",
+        prog="codecourt",
+        description="Verify Infer static-analysis warnings with CodeCourt's multi-agent evidence loop",
     )
     p.add_argument("--report",      help="Path to Infer's report.json")
     p.add_argument("--source-root", help="Root directory of the source code")

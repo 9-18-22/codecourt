@@ -1,10 +1,12 @@
 # CodeCourt
 
-실행 증거를 이용해 Infer 정적 분석 경고를 검증하는 대심형 에이전트입니다.
-Prosecutor가 결함 가설과 실험을 만들고, 실제 C 코드를 ASan/UBSan으로 실행한 뒤,
-Defense가 caller 조건·mock·다른 결함 가능성을 반박합니다. Evidence Verifier는
-저장된 코드와 로그를 규칙 기반으로 검사하고 Judge는 추가 실험 또는 최종 판정을
-선택합니다.
+**Execution-Evidence-Based Multi-Agent System for Static Analysis Warning Verification**
+
+CodeCourt는 실행 증거를 이용해 Infer 정적 분석 경고를 검증하는 Multi-Agent
+시스템입니다. Prosecutor가 결함 가설과 실험을 만들고, 실제 C 코드를
+ASan/UBSan으로 실행한 뒤, Defense가 caller 조건·mock·다른 결함 가능성을
+반박합니다. Evidence Verifier는 저장된 코드와 로그를 규칙 기반으로 검사하고
+Judge는 추가 실험 또는 최종 판정을 선택합니다.
 
 현재 버전은 정답 라벨이 없는 리얼월드 C 프로젝트를 대상으로 합니다. Toyota ITC와
 파일명 기반 ground truth 기능은 제거했습니다.

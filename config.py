@@ -1,5 +1,5 @@
 """
-Central configuration for the static-verifier pipeline.
+Central configuration for the CodeCourt verification pipeline.
 All tuneable parameters live here – no magic numbers scattered in modules.
 """
 
